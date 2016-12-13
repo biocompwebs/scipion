@@ -53,6 +53,9 @@ public:
     bool dont_mirror;
     /** Do pspc */
     bool pspc;
+
+    bool reAlignImages;
+
 public:
     // SelFile with the input images
     MetaData SF;

@@ -38,6 +38,8 @@ void ProgAlign2d::readParams()
     Niter = getIntParam("--iter");
     dont_mirror = checkParam("--do_not_check_mirrors");
     pspc = checkParam("--pspc");
+	reAlignImages = !checkParam("--dontAlign");
+
 }
 
 // Show ====================================================================
@@ -65,6 +67,8 @@ void ProgAlign2d::defineParams()
     addParamsLine(" [--iter <N=5>]            : Number of iterations to perform");
     addParamsLine(" [--do_not_check_mirrors]  : Do not consider mirrors when aligning");
     addParamsLine(" [--pspc]                  : Compute first reference by pspc");
+    addParamsLine(" [--dontAlign]             : Do not center and modify the 2D angle of the class representative");
+
 }
 
 // PsPc pyramidal combination of images ========================================
@@ -110,7 +114,11 @@ void ProgAlign2d::alignPairs(MetaData &MDin, MetaData &MDout, int level)
         FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(I1m)
             DIRECT_MULTIDIM_ELEM(I1m,n)=0.5*(DIRECT_MULTIDIM_ELEM(I1m,n)+
                                              DIRECT_MULTIDIM_ELEM(I2m,n));
-        centerImage(I1m,aux2,aux3);
+
+        if (reAlignImages)
+        {
+        	centerImage(I1m,aux2,aux3);
+        }
 
         // Write to output stack
         fnOut.compose(i+1,fnOutputStack);
@@ -236,13 +244,16 @@ void ProgAlign2d::refinement()
         // Update reference
         FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(Irefm)
             DIRECT_MULTIDIM_ELEM(Irefm,n)=lambdap*DIRECT_MULTIDIM_ELEM(Irefm,n)+
-                                          lambda*DIRECT_MULTIDIM_ELEM(Im,n);
+            lambda*DIRECT_MULTIDIM_ELEM(Im,n);
 
-        // From time to time, recenter the reference
-        if ((++centerCount)%10==0)
+        if (reAlignImages)
         {
-        	centerImage(Irefm,aux2,aux3);
-        	centerCount=0;
+        	// From time to time, recenter the reference
+        	if ((++centerCount)%10==0)
+        	{
+        		centerImage(Irefm,aux2,aux3);
+        		centerCount=0;
+        	}
         }
 
         if ((++i)%100==0)
