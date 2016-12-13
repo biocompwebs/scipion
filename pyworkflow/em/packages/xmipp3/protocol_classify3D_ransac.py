@@ -37,10 +37,11 @@ from pyworkflow.em.packages.xmipp3.protocol_ctf_correct_wiener2d import XmippPro
 from pyworkflow.em.protocol import ProtClassify3D
 from pyworkflow.utils.path import moveFile, makePath
 from pyworkflow.gui.plotter import Plotter
+from pyworkflow.em.metadata.utils import getSize
 import xmipp
 import math
 import random
-
+from os.path import join, exists
 
 
 from pyworkflow.em.packages.xmipp3.convert import (writeSetOfParticles,
@@ -112,7 +113,6 @@ class XmippProtClass3DRansac(ProtClassify3D, XmippProtDirectionalClasses, XmippP
         
     def _insertAllSteps(self):
         
-        '''
         convertId = self._insertFunctionStep('convertInputStep',
                                              self.inputParticles.get().getObjId(), self.inputVolume.get().getObjId(), 
                                              self.targetResolution.get())
@@ -123,8 +123,7 @@ class XmippProtClass3DRansac(ProtClassify3D, XmippProtDirectionalClasses, XmippP
         self._insertFunctionStep('selectDirections', self.symmetryGroup.get())
         
 
-'''
-        self._insertFunctionStep('classify2DStep', 0)
+        self._insertFunctionStep('classifyCL2DStep', 0)
         
         #deps = [] # store volumes steps id to use as dependencies for last step
         
@@ -206,6 +205,7 @@ class XmippProtClass3DRansac(ProtClassify3D, XmippProtDirectionalClasses, XmippP
         
         #MDL_DIRECTION
         mdDirections = xmipp.MetaData()
+        mdRef = xmipp.MetaData(fnGallery)
         
         for d in range(self.directionalTrials):
             
@@ -222,12 +222,11 @@ class XmippProtClass3DRansac(ProtClassify3D, XmippProtDirectionalClasses, XmippP
                 
                 ''' the gallery give is a good reference'''
                 galleryImgNo = int(block.split("_")[1])
-                mdRef = xmipp.MetaData(fnGallery)
                 rot  = mdRef.getValue(xmipp.MDL_ANGLE_ROT,galleryImgNo)
                 tilt = mdRef.getValue(xmipp.MDL_ANGLE_TILT,galleryImgNo)
                 psi = 0.0
                 
-                self.runJob("xmipp_image_align","-i %s  --oroot %s --iter 5 --ref %s"
+                self.runJob("xmipp_image_align","-i %s  --oroot %s --iter 5 --ref %s --dontAlign"
                             %(fnBlock,fnDir,mdRef.getValue(xmipp.MDL_IMAGE,galleryImgNo)),numberOfMpi=1)
                 
                 self.runJob("xmipp_transform_mask","-i %s  -o %s --mask circular -%f"
@@ -260,56 +259,98 @@ class XmippProtClass3DRansac(ProtClassify3D, XmippProtDirectionalClasses, XmippP
         mdDirections.sort(xmipp.MDL_WEIGHT)
         mdDirections.write(self._getExtraPath("directions.xmd"))
 
-    def classify2DStep(self,step):
+    def classifyCL2DStep(self,step):
         
         mdOut = xmipp.MetaData()
         mdDirections = xmipp.MetaData(self._getExtraPath("directions.xmd"))
         index = mdDirections.size()
         list = mdDirections.getValue(xmipp.MDL_DIRECTION,index-step)
         fnNeighbours = self._getExtraPath("neighbours.xmd")
-        fnGallery=self._getExtraPath("gallery.doc")
+        fnGallery=self._getExtraPath("gallery.stk")
         listOfBlocks = xmipp.getBlocksInMetaDataFile(fnNeighbours)
-        
+        fnDirectional=self._getPath("directionalClasses.xmd")
+        mdRef = xmipp.MetaData(self._getExtraPath("gallery.doc"))
+
         for i in range(self.directionalSamples):
+            
             selectedBlockNumber = int(list[i])
-            block = listOfBlocks[selectedBlockNumber]
+            #This is because in one case the number starts in 0 and in other in 1
+            block = listOfBlocks[selectedBlockNumber-1]
             fnBlock="%s@%s"%(block,fnNeighbours)
             fnDir = self._getExtraPath("direction_%s"%i)
             
+            galleryImgNo = int(block.split("_")[1])
+            rot  = mdRef.getValue(xmipp.MDL_ANGLE_ROT,galleryImgNo)
+            tilt = mdRef.getValue(xmipp.MDL_ANGLE_TILT,galleryImgNo)
+            psi = 0.0
+
             if not exists(fnDir):
                 makePath(fnDir)
-                        Nlevels = int(math.ceil(math.log(self.directionalClasses.get())/math.log(2)))
-
-            fnOut = join(fnDir,"level_%02d/class_classes.stk"%Nlevels)
-            if not exists(fnOut):
-                fnBlock="%s@%s"%(block,fnNeighbours)
-                if getSize(fnBlock)>25:
-                    try:
-                        args="-i %s --odir %s --ref0 %s@%s --iter %d --nref %d --distance correlation --classicalMultiref --maxShift %d"%\
-                            (fnBlock,fnDir,imgNo,fnGallery,self.cl2dIterations.get(),self.directionalClasses.get(),self.maxShift.get())
-                        self.runJob("xmipp_classify_CL2D", args)
-                        fnAlignRoot = join(fnDir,"classes")
-                        self.runJob("xmipp_image_align","-i %s --ref %s@%s --oroot %s --iter 1"%(fnOut,imgNo,fnGallery,fnAlignRoot),numberOfMpi=1)
-                        self.runJob("xmipp_transform_geometry","-i %s_alignment.xmd --apply_transform"%fnAlignRoot,numberOfMpi=1)
+            
+            Nlevels = self.numClasses.get()
+            fnOut = join(fnDir,"level_%02d/class_classes.stk"%(Nlevels-1))
+            fnBlock = "%s@%s" % (block, fnNeighbours)
+            
+            if getSize(fnBlock) > 20:
+                
+                args = "-i %s --odir %s --ref0 %s@%s --iter %d --nref %d --distance correlation --classicalMultiref --maxShift %d --dontAlign" % \
+                        (fnBlock, fnDir, selectedBlockNumber, fnGallery, 10, Nlevels, 5)
+                self.runJob("xmipp_classify_CL2D", args, numberOfMpi=2)
+                fnAlignRoot = join(fnDir, "classes")
+                self.runJob("xmipp_image_align", "-i %s --ref %s@%s --oroot %s --iter 5 --dontAlign" % (fnOut, selectedBlockNumber, fnGallery, fnAlignRoot), numberOfMpi=1)
+                self.runJob("xmipp_transform_geometry", "-i %s_alignment.xmd --apply_transform" % fnAlignRoot, numberOfMpi=1)
                     
-                        # Construct output metadata
-                        if exists(fnOut):
-                            for i in range(self.directionalClasses.get()):
-                                objId = mdOut.addObject()
-                                mdOut.setValue(xmipp.MDL_REF,int(imgNo)-1,objId)
-                                mdOut.setValue(xmipp.MDL_IMAGE,"%d@%s"%(i+1,fnOut),objId)
-                    except:
-                        print("The classification failed, probably because of a low number of images.")
-                        print("However, this classification does not hinder the protocol to continue")
+                if exists(fnOut):
+                    for n in range(Nlevels):
+                        objId = mdOut.addObject()
+                        print n, "%d@%s" % (n + 1, fnOut), int(selectedBlockNumber)
+                            
+                        mdOut.setValue(xmipp.MDL_REF, int(selectedBlockNumber), objId)
+                        mdOut.setValue(xmipp.MDL_IMAGE, "%d@%s" % (n + 1, fnOut), objId)
+                        mdOut.setValue(xmipp.MDL_IMAGE_IDX, long(n+1), objId)
+                        mdOut.setValue(xmipp.MDL_ANGLE_ROT,rot,objId)
+                        mdOut.setValue(xmipp.MDL_ANGLE_TILT,tilt,objId) 
+                        mdOut.setValue(xmipp.MDL_ANGLE_PSI,psi,objId)
+                        mdOut.setValue(xmipp.MDL_SHIFT_X,0.0,objId)
+                        mdOut.setValue(xmipp.MDL_SHIFT_Y,0.0,objId)
+                    
+                    mdOut.write("%s@%s" % (block, fnDirectional), xmipp.MD_APPEND)
+                    mdOut.clear()
+            else :
+                
+                if getSize(fnBlock) < 2:
+                    continue
+                
+                else :
+                    Nlevels = 1
+                    fnOut = join(fnDir,"level_%02d/class_classes.stk"%(Nlevels-1))
+                    args = "-i %s --odir %s --ref0 %s@%s --iter %d --nref %d --distance correlation --classicalMultiref --maxShift %d --dontAlign " % \
+                            (fnBlock, fnDir, selectedBlockNumber, fnGallery, 10, Nlevels, 5)
+                    self.runJob("xmipp_classify_CL2D", args, numberOfMpi=2)
+                    fnAlignRoot = join(fnDir, "classes")
+                    self.runJob("xmipp_image_align", "-i %s --ref %s@%s --oroot %s --iter 5 --dontAlign " % (fnOut, selectedBlockNumber, fnGallery, fnAlignRoot), numberOfMpi=1)
+                    self.runJob("xmipp_transform_geometry", "-i %s_alignment.xmd --apply_transform" % fnAlignRoot, numberOfMpi=1)
+                    
+                    if exists(fnOut):
+                        n = 0L
+                        objId = mdOut.addObject()
+                        mdOut.setValue(xmipp.MDL_REF, int(selectedBlockNumber), objId)
+                        mdOut.setValue(xmipp.MDL_IMAGE, "%d@%s" % (n + 1, fnOut), objId)
+                        mdOut.setValue(xmipp.MDL_IMAGE_IDX, n+1, objId)
+                        mdOut.setValue(xmipp.MDL_ANGLE_ROT,rot,objId)
+                        mdOut.setValue(xmipp.MDL_ANGLE_TILT,tilt,objId) 
+                        mdOut.setValue(xmipp.MDL_ANGLE_PSI,psi,objId)
+                        mdOut.setValue(xmipp.MDL_SHIFT_X,0.0,objId)
+                        mdOut.setValue(xmipp.MDL_SHIFT_Y,0.0,objId)
                         
-        fnDirectional=self._getPath("directionalClasses.xmd")
-        mdOut.write(fnDirectional)
-        self.runJob("xmipp_metadata_utilities","-i %s --set join %s ref"%(fnDirectional,self._getExtraPath("gallery.doc")), numberOfMpi=1)
-        print selectedBlockNumber
-        raise NameError('HiThere')
+                        mdOut.write("%s@%s" % (block, fnDirectional), xmipp.MD_APPEND)
+                        mdOut.clear()
+        
+        #self.runJob("xmipp_metadata_utilities","-i %s --set join %s ref"%(fnDirectional,self._getExtraPath("gallery.doc")), numberOfMpi=1)
+        raise Exception('spam', 'eggs')
+
 
                 
-        
     def createOutputStep(self):
         pass
     #--------------------------- INFO functions -------------------------------------------- 
