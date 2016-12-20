@@ -21,7 +21,7 @@
 # * 02111-1307  USA
 # *
 # *  All comments concerning this program package may be sent to the
-# *  e-mail address 'jmdelarosa@cnb.csic.es'
+# *  e-mail address 'scipion@cnb.csic.es'
 # *
 # **************************************************************************
 
@@ -48,7 +48,7 @@ def getEnviron():
     IMAGIC_BATCH is needed for batch files to work.
     """
     env = Environ(os.environ)
-    imagicdir = env.get('IMAGIC_DIR', None)  # Scipion definition
+    imagicdir = env.get('IMAGIC_HOME', None)  # Scipion definition
 
     if imagicdir is None or not isdir(imagicdir):
         print "ERROR: Missing IMAGIC_DIR variable in scipion.conf file or path does not exist."
@@ -81,7 +81,7 @@ def getEnviron():
 
 
 def getVersion():
-    imagicdir = os.environ['IMAGIC_DIR']
+    imagicdir = os.environ['IMAGIC_HOME']
     for v in getSupportedVersions():
         versionFile = join(imagicdir, 'version_' + v)
         if exists(versionFile):
@@ -160,7 +160,6 @@ def runScript(inputScript, log=None, cwd=None):
 
 class ImagicPltFile(object):
     """ Handler class to read/write imagic plt file. """
-    pass
 
     def __init__(self, filename):
         self._filename = filename
@@ -176,3 +175,50 @@ class ImagicPltFile(object):
             yield int(fields[0]), fields[1]
 
         f.close()
+
+
+class ImagicLisFile(object):
+    """ Handler class to read imagic lis file. """
+
+    def __init__(self, filename, clsNum):
+        self._filename = filename
+        self._clsNum = clsNum
+        self.varianceDict = {}
+        self.quality1Dict = {}
+        self.quality2Dict = {}
+
+    def parseFile(self, source):
+        """ Collect info for all classes into a common list"""
+        paramsList = []
+        read = False
+        for line in source:
+            line = line.strip().lower()
+            if line.startswith("classes sorted by intra-class variance"):
+                read = True
+                # read file starting from this line
+            else:
+                patterns = ['#', ':', 'classes']
+                if read and not any(x in line for x in patterns):
+                    fields = line.split()
+                    if len(fields) == 5:
+                        # we have 5 columns in line
+                        classId = int(fields[2])
+                        value = float(fields[1])
+                        paramsList.append([classId, value])
+                continue
+
+        return paramsList
+
+    def getParams(self):
+        f = open(self._filename)
+        cls = self._clsNum
+        paramsList = self.parseFile(f)
+        for param in paramsList[0:cls]:
+            self.varianceDict[param[0]] = param[1]
+        for param in paramsList[cls:(2*cls)]:
+            self.quality1Dict[param[0]] = param[1]
+        for param in paramsList[(2*cls):]:
+            self.quality2Dict[param[0]] = param[1]
+        f.close()
+
+        return self.varianceDict, self.quality1Dict, self.quality2Dict
