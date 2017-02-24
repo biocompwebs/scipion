@@ -53,7 +53,7 @@ public:
 	FileName fnmic, fnOut;
 
 	/** sampling rate, minimum resolution, and maximum resolution */
-	double sampling, minRes, maxRes, R;
+	double radius, minRes, maxRes, R;
 
 	/** Is the volume previously masked?*/
 	//int R;

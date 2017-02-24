@@ -34,6 +34,7 @@ void ProgMicrographConvPicking::readParams()
 {
 	fnmic = getParam("--micrograph");
 	fnOut = getParam("-o");
+	radius = getDoubleParam("-radius");
 }
 
 
@@ -42,6 +43,8 @@ void ProgMicrographConvPicking::defineParams()
 	addUsageLine("This function determines the local resolution of a map");
 	addParamsLine("  --micrograph <img_file=\"\">   : Input micrograph");
 	addParamsLine("  [-o <output=\"blurred.xmp\">]: Local resolution volume (in Angstroms)");
+	addParamsLine("  [-radius <s=2>]: Local resolution volume (in Angstroms)");
+
 }
 
 void ProgMicrographConvPicking::produceSideInfo()
@@ -54,12 +57,15 @@ void ProgMicrographConvPicking::run()
 {
 	std::cout << "Starting..." << std::endl;
 	Image<double> micImg;
-	Image<int> outputImg;
+	Image<double> outputImg;
 	size_t Xdim, Ydim, Zdim, Ndim;
+	MultidimArray<double> highcontrastMic, circKernel;
+	MultidimArray<double> multimicImg;
 
 	//Data reading
 	micImg.read(fnmic);
 	micImg.getDimensions(Xdim, Ydim, Zdim, Ndim);
+	multimicImg = micImg();
 
 	if (Xdim % 2 == 0){
 		Xdim = Xdim + 1;
@@ -72,28 +78,72 @@ void ProgMicrographConvPicking::run()
 	}
 
 	//Defining a disk for the convolution
-	MultidimArray<int> circKernel;
-	circKernel.initZeros(Ndim, Zdim, Ydim*0.5, Xdim*0.5);
+//	circKernel.initZeros(Ndim, Zdim, 2*radius+1, 2*radius+1);
+//
+//	int Xorig = radius;
+//	int Yorig = Xorig;
+//
+//	std::cout << "centro x = " << Xorig << std::endl;
+//	std::cout << "centro y = " << Yorig << std::endl;
+//
+//	A2D_ELEM(circKernel, Xorig, Yorig) = 1;
+//
+//	std::cout << A2D_ELEM(circKernel, Xorig, Yorig) << std::endl;
+//
+//	for (size_t i=0; i< radius+1; i++)
+//	{
+//		for (size_t j=0; j< radius+1; j++)
+//		{
+//			if (i*i+j*j<=((radius)*(radius)))
+//			{
+//				std::cout << "entro" << std::endl;
+//				A2D_ELEM(circKernel, Xorig+i, Yorig+j) = 1;
+//				A2D_ELEM(circKernel, Xorig+i, Yorig-j) = 1;
+//				A2D_ELEM(circKernel, Xorig-i, Yorig+j) = 1;
+//				A2D_ELEM(circKernel, Xorig-i, Yorig-j) = 1;
+//			}
+//		}
+//	}
+//	outputImg = circKernel;
+//	outputImg.write("kernel.xmp");
+//
+//	highcontrastMic.initZeros(multimicImg);
+//
+//	circKernel.printShape();
+//	circKernel.setXmippOrigin();
+//	multimicImg.setXmippOrigin();
+//	convolutionFFT(circKernel, multimicImg, highcontrastMic);
+//
+//	CenterFFT(highcontrastMic, true);
+//
+//	std::cout << "llego 2" << std::endl;
+////
+//
+//
+//	Image<double> highcontrastMicImg = highcontrastMic;
+//	highcontrastMicImg.write(fnOut);
+//	std::cout << "llego 4" << std::endl;
 
-	circKernel.printShape();
+	//
+	circKernel.initZeros(Ndim, Zdim, Ydim, Xdim);
 
-	int Xorig = Xdim*0.5*0.5+1;
-	int Yorig = Ydim*0.5*0.5+1;
+	int Xorig = Xdim*0.5+1;
+	int Yorig = Ydim*0.5+1;
 
 	std::cout << "centro x = " << Xorig << std::endl;
 	std::cout << "centro y = " << Yorig << std::endl;
 
-	size_t NpixelsRadius = 5;
 	A2D_ELEM(circKernel, Xorig, Yorig) = 1;
 
 	std::cout << A2D_ELEM(circKernel, Xorig, Yorig) << std::endl;
 
-	for (size_t i=0; i< NpixelsRadius; i++)
+	for (size_t i=0; i< radius+1; i++)
 	{
-		for (size_t j=0; j< NpixelsRadius; j++)
+		for (size_t j=0; j< radius+1; j++)
 		{
-			if (i*i+j*j<NpixelsRadius*NpixelsRadius)
+			if (i*i+j*j<=((radius)*(radius)))
 			{
+				std::cout << "entro" << std::endl;
 				A2D_ELEM(circKernel, Xorig+i, Yorig+j) = 1;
 				A2D_ELEM(circKernel, Xorig+i, Yorig-j) = 1;
 				A2D_ELEM(circKernel, Xorig-i, Yorig+j) = 1;
@@ -102,6 +152,23 @@ void ProgMicrographConvPicking::run()
 		}
 	}
 	outputImg = circKernel;
-	outputImg.write(fnOut);
+	outputImg.write("kernel.xmp");
+
+	highcontrastMic.initZeros(multimicImg);
+
+	circKernel.printShape();
+	circKernel.setXmippOrigin();
+	multimicImg.setXmippOrigin();
+	convolutionFFT(multimicImg, circKernel, highcontrastMic);
+
+
+	std::cout << "llego 2" << std::endl;
+//
+
+
+	Image<double> highcontrastMicImg = highcontrastMic;
+	highcontrastMicImg.write(fnOut);
+	std::cout << "llego 4" << std::endl;
+
 }
 
