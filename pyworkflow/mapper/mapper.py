@@ -20,7 +20,7 @@
 # * 02111-1307  USA
 # *
 # *  All comments concerning this program package may be sent to the
-# *  e-mail address 'xmipp@cnb.csic.es' Eso eso ...las quejas a XMIPP
+# *  e-mail address 'scipion@cnb.csic.es' Eso eso ...las quejas a XMIPP
 # *
 # **************************************************************************
 
@@ -62,7 +62,7 @@ class Mapper():
             print "WARNING: %s" % msg
             self.__warnings.add(msg)
     
-    def _buildObject(self, className, **kwargs):
+    def _buildObjectFromClass(self, className, **kwargs):
         """ Build an instance of an object
         given the class name, it should be in 
         the classes dictionary.
@@ -131,7 +131,9 @@ class Mapper():
     def selectById(self, objId):
         """Return the object which id is objId"""
         pass
-    
+    def exists(self,objId):
+        """Return True if the id is in the database"""
+        pass
     def selectAll(self):
         """Return all object from storage"""
         pass

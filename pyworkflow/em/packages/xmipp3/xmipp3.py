@@ -21,7 +21,7 @@
 # * 02111-1307  USA
 # *
 # *  All comments concerning this program package may be sent to the
-# *  e-mail address 'jmdelarosa@cnb.csic.es'
+# *  e-mail address 'scipion@cnb.csic.es'
 # *
 # **************************************************************************
 
@@ -57,8 +57,13 @@ def getEnviron(xmippFirst=True):
     pos = Environ.BEGIN if xmippFirst else Environ.END
     environ.update({
             'PATH': join(os.environ['XMIPP_HOME'], 'bin'),
-            'LD_LIBRARY_PATH': join(os.environ['XMIPP_HOME'], 'lib')
+            'LD_LIBRARY_PATH': join(os.environ['XMIPP_HOME'], 'lib'),
             }, position=pos)
+    if  os.environ['CUDA']:
+        environ.update({
+            'LD_LIBRARY_PATH': os.environ['NVCC_LIBDIR']
+            }, position=pos)
+
     return environ
 
 def runXmippProgram(program, args=""):
@@ -588,6 +593,7 @@ class HelicalFinder():
             args+=" --mask cylinder %d %d"%(-cylinderOuterRadius,-height)
         elif cylinderOuterRadius>0 and cylinderInnerRadius>0:
             args+=" --mask tube %d %d %d"%(-cylinderInnerRadius,-cylinderOuterRadius,-height)
+
         self.runJob('xmipp_volume_find_symmetry',args,numberOfMpi=1)
 
     def runSymmetrize(self, fnVol, dihedral, fnParams, fnOut, heightFraction, cylinderInnerRadius, cylinderOuterRadius, height, Ts):

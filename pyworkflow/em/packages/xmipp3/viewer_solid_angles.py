@@ -20,7 +20,7 @@
 # * 02111-1307  USA
 # *
 # *  All comments concerning this program package may be sent to the
-# *  e-mail address 'jmdelarosa@cnb.csic.es'
+# *  e-mail address 'scipion@cnb.csic.es'
 # *
 # **************************************************************************
 """
@@ -45,12 +45,16 @@ class SolidAnglesViewer(Viewer):
     _targets = [XmippProtSolidAngles]
     
 
-    def _visualize(self, obj, **args):
+    def _visualize(self, obj, **kwargs):
         views = []
-        labels = 'id enabled _representative._filename _reprojection._filename _xmipp_angleRot _xmipp_angleTilt'
         renderLabels = '_representative._filename _reprojection._filename'
-        if getattr(obj,'outputClasses'):
-            views.append(ObjectView(self._project, obj.strId(), obj.outputClasses.getFileName(),
+        labels = 'id enabled %s _xmipp_angleRot _xmipp_angleTilt _xmipp_classCount' % renderLabels
+
+        outputClasses = getattr(obj, 'outputClasses', None)
+
+        if outputClasses is not None:
+            views.append(ObjectView(self._project, outputClasses.strId(),
+                                    outputClasses.getFileName(),
                                     viewParams={showj.ORDER: labels, 
                                                 showj.VISIBLE: labels,
                                                 showj.RENDER: renderLabels,

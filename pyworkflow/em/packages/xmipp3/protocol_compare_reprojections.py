@@ -20,13 +20,14 @@
 # * 02111-1307  USA
 # *
 # *  All comments concerning this program package may be sent to the
-# *  e-mail address 'jmdelarosa@cnb.csic.es'
+# *  e-mail address 'scipion@cnb.csic.es'
 # *
 # **************************************************************************
 
 from math import floor
 import os
 
+from pyworkflow import VERSION_1_1
 from pyworkflow.protocol.params import PointerParam, StringParam, FloatParam, BooleanParam
 from pyworkflow.protocol.constants import LEVEL_ADVANCED
 from pyworkflow.em.constants import ALIGN_PROJ
@@ -51,6 +52,7 @@ class XmippProtCompareReprojections(ProtAnalysis3D, ProjMatcher):
     its determinant [Cherian2013]. The extremes of this score (called zScoreResCov), that is
     values particularly low or high, may indicate outliers."""
     _label = 'compare reprojections'
+    _version = VERSION_1_1
     
     def __init__(self, **args):
         ProtAnalysis3D.__init__(self, **args)
@@ -109,16 +111,18 @@ class XmippProtCompareReprojections(ProtAnalysis3D, ProjMatcher):
         if xdim!=self._getDimensions():
             self.runJob("xmipp_image_resize","-i %s --dim %d"%(fnVol,self._getDimensions()))
     
-    def produceResiduals(self, fnVol, fnAngles):
+    def produceResiduals(self, fnVol, fnAngles, Ts):
+        if fnVol.endswith(".mrc"):
+            fnVol+=":mrc"
         anglesOutFn=self._getExtraPath("anglesCont.stk")
         residualsOutFn=self._getExtraPath("residuals.stk")
         projectionsOutFn=self._getExtraPath("projections.stk")
         xdim=self.inputVolume.get().getDim()[0]
-        originalTs=self.inputVolume.get().getSamplingRate()
-        Ts=xdim*originalTs/self._getDimensions()
         self.runJob("xmipp_angular_continuous_assign2", "-i %s -o %s --ref %s --optimizeAngles --optimizeGray --optimizeShift --max_shift %d --oresiduals %s --oprojections %s --sampling %f" %\
-                    (fnAngles,anglesOutFn,self._getTmpPath("volume.vol"),floor(xdim*0.05),residualsOutFn,projectionsOutFn,Ts))
-
+                    (fnAngles,anglesOutFn,fnVol,floor(xdim*0.05),residualsOutFn,projectionsOutFn,Ts))
+        fnNewParticles=self._getExtraPath("images.stk")
+        if os.path.exists(fnNewParticles):
+            cleanPath(fnNewParticles)
     
     def evaluateResiduals(self):
         # Evaluate each image

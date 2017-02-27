@@ -1,6 +1,6 @@
 # **************************************************************************
 # *
-# * Authors:     Javier Vargas (jvargas@cnb.csic.es)
+# * Authors:     C.O.S. Sorzano (coss@cnb.csic.es)
 # *
 # * Unidad de  Bioinformatica of Centro Nacional de Biotecnologia , CSIC
 # *
@@ -20,21 +20,26 @@
 # * 02111-1307  USA
 # *
 # *  All comments concerning this program package may be sent to the
-# *  e-mail address 'jmdelarosa@cnb.csic.es'
+# *  e-mail address 'scipion@cnb.csic.es'
 # *
 # **************************************************************************
 
 from os.path import join, exists
+import math
 
-from pyworkflow.protocol.params import PointerParam, FloatParam, StringParam, LEVEL_ADVANCED
+import pyworkflow.protocol.params as params
+from pyworkflow import VERSION_1_1
 from pyworkflow.utils.path import makePath
+from pyworkflow.em.convert import ImageHandler, ALIGN_PROJ
 from pyworkflow.em.data import Image
 from pyworkflow.em.protocol import ProtAnalysis3D
-from pyworkflow.em.packages.xmipp3.convert import writeSetOfParticles, xmippToLocation
-from pyworkflow.em.metadata.utils import getSize
+from pyworkflow.em.packages.xmipp3.convert import writeSetOfParticles
+import pyworkflow.em.metadata as md
 
 import xmipp
-from convert import readSetOfClasses2D, setXmippAttributes
+from convert import rowToAlignment, setXmippAttributes, xmippToLocation
+from xmipp3 import findRow
+from constants import SYM_URL
 
 
 class XmippProtSolidAngles(ProtAnalysis3D):
@@ -44,135 +49,328 @@ class XmippProtSolidAngles(ProtAnalysis3D):
     """
 
     _label = 'solid angles'
+    _version = VERSION_1_1
     
     def __init__(self, *args, **kwargs):
         ProtAnalysis3D.__init__(self, *args, **kwargs)
         
-    #--------------------------- DEFINE param functions --------------------------------------------   
+    #--------------------------- DEFINE param functions ------------------------
     def _defineParams(self, form):
         form.addSection(label='Input')
         
-        form.addParam('inputVolume', PointerParam, pointerClass='Volume',
+        form.addParam('inputVolume', params.PointerParam, pointerClass='Volume',
                       label="Input volume",  
-                      help='Select the input volume.')     
-        form.addParam('inputParticles', PointerParam, pointerClass='SetOfParticles', 
+                      help='Select the input volume.')
+
+        form.addParam('inputParticles', params.PointerParam,
+                      pointerClass='SetOfParticles',
+                      pointerCondition='hasAlignmentProj',
                       label="Input particles",  
-                      help='Select the input projection images with an angular assignment.') 
-        form.addParam('symmetryGroup', StringParam, default='c1',
+                      help='Select the input experimental images with an '
+                           'angular assignment.')
+
+        form.addParam('symmetryGroup', params.StringParam, default='c1',
                       label="Symmetry group", 
-                      help='See [[Xmipp Symmetry][http://www2.mrc-lmb.cam.ac.uk/Xmipp/index.php/Conventions_%26_File_formats#Symmetry]] page '
-                           'for a description of the symmetry format accepted by Xmipp') 
-        form.addParam('angularSampling', FloatParam, default=5, label='Angular sampling', expertLevel=LEVEL_ADVANCED, help="In degrees")
-        form.addParam('angularDistance', FloatParam, default=10, label='Angular distance', expertLevel=LEVEL_ADVANCED,
-                      help="In degrees. An image belongs to a group if its distance is smaller than this value")
-        form.addParam('maxShift', FloatParam, default=15, label='Maximum shift', expertLevel=LEVEL_ADVANCED,
+                      help='See %s page for a description of the symmetries '
+                           'accepted by Xmipp' % SYM_URL)
+
+        form.addParam('angularSampling', params.FloatParam, default=5,
+                      label='Angular sampling',
+                      expertLevel=params.LEVEL_ADVANCED, help="In degrees")
+
+        form.addParam('angularDistance', params.FloatParam, default=10,
+                      expertLevel=params.LEVEL_ADVANCED,
+                      label='Angular distance',
+                      help="In degrees. An image belongs to a group if its "
+                           "distance is smaller than this value")
+
+        form.addParam('maxShift', params.FloatParam, default=15,
+                      expertLevel=params.LEVEL_ADVANCED,
+                      label='Maximum shift',
                       help="In pixels")
-        
+
+        form.addSection("Directional Classes")
+
+        form.addParam('directionalClasses', params.IntParam, default=1,
+                      label='Number of directional classes',
+                      help="By default only one class will be computed for "
+                           "each projection direction. More classes could be"
+                           "computed and this is needed for protocols "
+                           "split-volume. ")
+
+        form.addParam('targetResolution', params.FloatParam, default=10,
+                      condition="directionalClasses > 1",
+                      label='Target resolution (A)')
+
+        form.addParam('refineAngles', params.BooleanParam, default=True,
+                      expertLevel=params.LEVEL_ADVANCED,
+                      label='Refine angles',
+                      help="Refine the angles of the classes using a "
+                           "continuous angular assignment")
+
+        form.addParam('cl2dIterations', params.IntParam, default=5,
+                      expertLevel=params.LEVEL_ADVANCED,
+                      condition="directionalClasses > 1",
+                      label='Number of CL2D iterations')
+
         form.addParallelSection(threads=0, mpi=8)
     
-    #--------------------------- INSERT steps functions --------------------------------------------
+    #--------------------------- INSERT steps functions ------------------------
+
     def _insertAllSteps(self):        
-        self._insertFunctionStep('convertInputStep', self.inputParticles.get().getObjId(), self.inputVolume.get().getObjId())
-        self._insertFunctionStep('constructGroupsStep', self.inputParticles.get().getObjId(),
-                                 self.angularSampling.get(), self.angularDistance.get(), self.symmetryGroup.get())
+        self._insertFunctionStep('convertInputStep',
+                                 self.inputParticles.get().getObjId(),
+                                 self.inputVolume.get().getObjId())
+
+        self._insertFunctionStep('constructGroupsStep',
+                                 self.inputParticles.get().getObjId(),
+                                 self.angularSampling.get(),
+                                 self.angularDistance.get(),
+                                 self.symmetryGroup.get())
+
         self._insertFunctionStep('classifyGroupsStep')
+
+        if self.refineAngles:
+            self._insertFunctionStep('refineAnglesStep')
+
         self._insertFunctionStep('createOutputStep')
     
-    #--------------------------- STEPS functions ---------------------------------------------------
+    #--------------------------- STEPS functions -------------------------------
+
     def convertInputStep(self, particlesId, volId):
         """ Write the input images as a Xmipp metadata file. 
         particlesId: is only need to detect changes in
         input particles and cause restart from here.
         """
-        writeSetOfParticles(self.inputParticles.get(), self._getPath('input_particles.xmd'))
-        from pyworkflow.em.convert import ImageHandler
+        inputParticles = self.inputParticles.get()
+        inputVolume = self.inputVolume.get()
+
+        writeSetOfParticles(inputParticles, self._getExpParticlesFn())
+
         img = ImageHandler()
-        img.convert(self.inputVolume.get(), self._getTmpPath("volume.vol"))
-   
-    def constructGroupsStep(self, particlesId, angularSampling, angularDistance, symmetryGroup):
-        # Generate projections from this reconstruction        
-        params = {"inputVol" : self._getTmpPath("volume.vol"),
-                  "galleryStk" : self._getExtraPath("gallery.stk"),
-                  "galleryXmd" : self._getExtraPath("gallery.doc"),
-                  "neighborhoods": self._getExtraPath("neighbours.xmd"),
-                  "symmetry" : self.symmetryGroup.get(),
-                  "angularSampling" : self.angularSampling.get(),
-                  "angularDistance" : self.angularDistance.get(),
-                  "expParticles" : self._getPath('input_particles.xmd')
-                }
-        args = '-i %(inputVol)s -o %(galleryStk)s --sampling_rate %(angularSampling)f --sym %(symmetry)s'
-        args += ' --method fourier 1 0.25 bspline --compute_neighbors --angular_distance %(angularSampling)f'
-        args += ' --experimental_images %(expParticles)s --max_tilt_angle 90'
-        
-        self.runJob("xmipp_angular_project_library", args % params)
-        
-        args = '--i1 %(expParticles)s --i2 %(galleryXmd)s -o %(neighborhoods)s --dist %(angularDistance)f --sym %(symmetry)s --check_mirrors'
-        self.runJob("xmipp_angular_neighbourhood", args % params, numberOfMpi=1)
-   
+        img.convert(inputVolume, self._getInputVolFn())
+
+        if self._useSeveralClasses():
+            # Scale particles
+            Xdim = inputParticles.getXDim()
+            Ts = inputParticles.getSamplingRate()
+            newTs = self.targetResolution.get() * 0.4
+            newTs = max(Ts, newTs)
+            newXdim = Xdim * Ts / newTs
+            self.runJob("xmipp_image_resize",
+                        "-i %s -o %s --save_metadata_stack %s --dim %d" %
+                        (self._getExpParticlesFn(),
+                         self._getTmpPath('scaled_particles.stk'),
+                         self._getTmpPath('scaled_particles.xmd'),
+                         newXdim))
+            # Scale volume
+            Xdim = inputVolume.getXDim()
+            if Xdim != newXdim:
+                self.runJob("xmipp_image_resize", "-i %s --dim %d"
+                            % (self._getInputVolFn(), newXdim), numberOfMpi=1)
+
+    def constructGroupsStep(self, particlesId, angularSampling,
+                            angularDistance, symmetryGroup):
+        args = '-i %s ' % self._getInputVolFn()
+        args += '-o %s ' % self._getExtraPath("gallery.stk")
+        args += '--sampling_rate %f ' % self.angularSampling
+        args += '--sym %s ' % self.symmetryGroup
+        args += '--method fourier 1 0.25 bspline --compute_neighbors '
+        args += '--angular_distance %f ' % self.angularDistance
+        args += '--experimental_images %s ' % self._getInputParticlesFn()
+        args += '--max_tilt_angle 90 '
+
+        # Create a gallery of projections of the input volume
+        # with the given angular sampling
+        self.runJob("xmipp_angular_project_library", args)
+
+        args = '--i1 %s ' % self._getInputParticlesFn()
+        args += '--i2 %s ' % self._getExtraPath("gallery.doc")
+        args += '-o %s ' % self._getExtraPath("neighbours.xmd")
+        args += '--dist %f ' % self.angularDistance
+        args += '--sym %s ' % self.symmetryGroup
+        args += '--check_mirrors '
+
+        # Compute several groups of the experimental images into
+        # different angular neighbourhoods
+        self.runJob("xmipp_angular_neighbourhood", args, numberOfMpi=1)
+
+    def classifyOneGroup(self, projNumber, projMdBlock, projRef,
+                         mdClasses, mdImages):
+        """ Classify one of the neighbourhood groups if not empty.
+         Class information will be stored in output metadata: mdOut
+        """
+        blockSize = md.getSize(projMdBlock)
+        Nclasses = self.directionalClasses.get()
+        Nlevels = int(math.ceil(math.log(Nclasses) / math.log(2)))
+
+        # Skip projection directions with not enough images to
+        # create a given number of classes
+        if blockSize / Nclasses < 10:
+            return
+
+        fnDir = self._getExtraPath("direction_%s" % projNumber)
+        makePath(fnDir)
+
+        # Run CL2D classification for the images assigned to one direction
+        args = "-i %s " % projMdBlock
+        args += "--odir %s " % fnDir
+        args += "--ref0 %s --iter 1 --nref %d " % (projRef, Nclasses)
+        args += "--distance correlation --classicalMultiref "
+        args += "--maxShift %f " % self.maxShift
+        self.runJob("xmipp_classify_CL2D", args)
+
+        # After CL2D the stk and xmd files should be produced
+        classesXmd = join(fnDir, "level_%02d/class_classes.xmd" % Nlevels)
+        classesStk = join(fnDir, "level_%02d/class_classes.stk" % Nlevels)
+
+        # Let's check that the output was produced
+        if not exists(classesStk):
+            return
+
+        # Run align of the class average and the projection representative
+        fnAlignRoot = join(fnDir, "classes")
+        args = "-i %s " % classesStk
+        args += "--ref %s " % projRef
+        args += " --oroot %s --iter 1" % fnAlignRoot
+        self.runJob("xmipp_image_align", args, numberOfMpi=1)
+
+        # Apply alignment
+        args = "-i %s_alignment.xmd --apply_transform" % fnAlignRoot
+        self.runJob("xmipp_transform_geometry", args, numberOfMpi=1)
+
+        for classNo in range(1, Nclasses+1):
+            localImagesMd = xmipp.MetaData("class%06d_images@%s"
+                                           % (classNo, classesXmd))
+
+            # New class detected
+            self.classCount += 1
+            # Check which images have not been assigned yet to any class
+            # and assign them to this new class
+            for objId in localImagesMd:
+                imgId = localImagesMd.getValue(xmipp.MDL_ITEM_ID, objId)
+                # Add images not classify yet and store their class number
+                if imgId not in self.classImages:
+                    self.classImages.add(imgId)
+                    newObjId = mdImages.addObject()
+                    mdImages.setValue(xmipp.MDL_ITEM_ID, imgId, newObjId)
+                    mdImages.setValue(xmipp.MDL_REF2, self.classCount, newObjId)
+
+            newClassId = mdClasses.addObject()
+            mdClasses.setValue(xmipp.MDL_REF, projNumber, newClassId)
+            mdClasses.setValue(xmipp.MDL_REF2, self.classCount, newClassId)
+            mdClasses.setValue(xmipp.MDL_IMAGE, "%d@%s" %
+                               (classNo, classesStk), newClassId)
+            mdClasses.setValue(xmipp.MDL_IMAGE1, projRef, newClassId)
+            mdClasses.setValue(xmipp.MDL_CLASS_COUNT,localImagesMd.size(),newClassId)
+
     def classifyGroupsStep(self):
-        from pyworkflow.em.metadata.utils import getSize
-        mdOut = xmipp.MetaData()
+        # Create two metadatas, one for classes and another one for images
+        mdClasses = xmipp.MetaData()
+        mdImages = xmipp.MetaData()
 
         fnNeighbours = self._getExtraPath("neighbours.xmd")
-        fnGallery=self._getExtraPath("gallery.stk")
-        for block in xmipp.getBlocksInMetaDataFile(fnNeighbours):
-            imgNo = block.split("_")[1]
-            fnDir = self._getExtraPath("direction_%s"%imgNo)
-            makePath(fnDir)
-            fnOut = join(fnDir,"level_00/class_classes.stk")
-            fnRef = "%s@%s"%(imgNo,fnGallery)
-            fnBlock = "%s@%s"%(block,fnNeighbours)
-            blockSize = getSize(fnBlock)
-            if blockSize!=0:
-                if not exists(fnOut):
-                    args="-i %s --odir %s --ref0 %s --iter 1 --nref 1 --distance correlation --classicalMultiref --maxShift %d"%\
-                        (fnBlock,fnDir,fnRef,self.maxShift.get())
-                    self.runJob("xmipp_classify_CL2D", args)
-                    fnAlignRoot = join(fnDir,"classes")
-                    self.runJob("xmipp_image_align","-i %s --ref %s --oroot %s --iter 1"%(fnOut,fnRef,fnAlignRoot),numberOfMpi=1)
-                    self.runJob("xmipp_transform_geometry","-i %s_alignment.xmd --apply_transform"%fnAlignRoot,numberOfMpi=1)
-    
-    #           # Construct output metadata
-                objId = mdOut.addObject()
-                mdOut.setValue(xmipp.MDL_REF,int(imgNo),objId)
-                mdOut.setValue(xmipp.MDL_IMAGE,"%s"%fnRef,objId)
-                mdOut.setValue(xmipp.MDL_IMAGE1,"1@%s"%fnOut,objId)
-                mdOut.setValue(xmipp.MDL_CLASS_COUNT,getSize("class000001_images@%s"%join(fnDir,"level_00/class_classes.xmd")),objId)
-        fnDirectional=self._getPath("directionalClasses.xmd")
-        mdOut.write("classes@"+fnDirectional)
-        self.runJob("xmipp_metadata_utilities",'-i %s --operate modify_values "ref=ref+1"'%self._getExtraPath("gallery.doc"), numberOfMpi=1)
-        self.runJob("xmipp_metadata_utilities","-i classes@%s --set join %s ref"%(fnDirectional,self._getExtraPath("gallery.doc")), numberOfMpi=1)
-        self.runJob("xmipp_metadata_utilities",'-i classes@%s --operate keep_column "ref image image1 classCount angleRot angleTilt"'%fnDirectional, numberOfMpi=1)
+        fnGallery = self._getExtraPath("gallery.stk")
+
+        self.classCount = 0
+        self.classImages = set()
 
         for block in xmipp.getBlocksInMetaDataFile(fnNeighbours):
-            imgNo = block.split("_")[1]
-            fnDir = self._getExtraPath("direction_%s"%imgNo)
-            try:
-                mdClass=xmipp.MetaData("class000001_images@%s"%join(fnDir,"level_00/class_classes.xmd"))
-                mdClass.write("class%s_images@%s"%(imgNo,fnDirectional),xmipp.MD_APPEND)
-            except Exception as e:
-                pass
+            # Figure out the projection number from the block name
+            projNumber = int(block.split("_")[1])
+
+            self.classifyOneGroup(projNumber,
+                                  projMdBlock="%s@%s" % (block, fnNeighbours),
+                                  projRef="%06d@%s" % (projNumber, fnGallery),
+                                  mdClasses=mdClasses,
+                                  mdImages=mdImages)
+
+        galleryMd = xmipp.MetaData(self._getExtraPath("gallery.doc"))
+        # Increment the reference number to starts from 1
+        galleryMd.operate("ref=ref+1")
+        mdJoined = xmipp.MetaData()
+        # Add extra information from the gallery metadata
+        mdJoined.join1(mdClasses, galleryMd, xmipp.MDL_REF)
+        # Remove unnecessary columns
+        md.keepColumns(mdJoined, "ref", "ref2", "image", "image1",
+                    "classCount", "angleRot", "angleTilt")
+
+        # Write both classes and images
+        fnDirectional = self._getDirectionalClassesFn()
+        self.info("Writting classes info to: %s" % fnDirectional)
+        mdJoined.write(fnDirectional)
+
+        fnDirectionalImages = self._getDirectionalImagesFn()
+        self.info("Writting images info to: %s" % fnDirectionalImages)
+        mdImages.write(fnDirectionalImages)
+
+    def refineAnglesStep(self):
+        # TODO: Implement this step from the current DirectionalClasses protocol
+        pass
 
     def createOutputStep(self):
-        fnDirectional=self._getPath("directionalClasses.xmd")
-        if exists(fnDirectional):
-            inputParticles = self.inputParticles.get()
-            self._sampling = inputParticles.getSamplingRate()
-            classes2DSet = self._createSetOfClasses2D(inputParticles)
-            readSetOfClasses2D(classes2DSet, fnDirectional, 'classes', preprocessClass=self._readRow)
-            self._defineOutputs(outputClasses=classes2DSet)
-            self._defineSourceRelation(self.inputParticles, classes2DSet)
-    
-    def _readRow(self, classItem, row):
-        img = Image()
-        img.setSamplingRate(self._sampling)
-        img.setLocation(xmippToLocation(row.getValue(xmipp.MDL_IMAGE1)))
-        classItem.reprojection = img
-        
-        setXmippAttributes(classItem, row, xmipp.MDL_ANGLE_ROT)
-        setXmippAttributes(classItem, row, xmipp.MDL_ANGLE_TILT)
+        self.mdClasses = xmipp.MetaData(self._getDirectionalClassesFn())
+        self.mdImages = xmipp.MetaData(self._getDirectionalImagesFn())
 
-    #--------------------------- INFO functions -------------------------------------------- 
+        inputParticles = self.inputParticles.get()
+        classes2D = self._createSetOfClasses2D(inputParticles)
+
+        classes2D.classifyItems(updateItemCallback=self._updateParticle,
+                                updateClassCallback=self._updateClass,
+                                itemDataIterator=md.iterRows(self.mdImages,
+                                                          sortByLabel=md.MDL_ITEM_ID))
+
+        self._defineOutputs(outputClasses=classes2D)
+        self._defineSourceRelation(self.inputParticles, classes2D)
+
+    def _updateParticle(self, item, row):
+        item.setClassId(row.getValue(xmipp.MDL_REF2))
+
+        # item.setTransform(rowToAlignment(row, em.ALIGN_2D))
+        #
+        # item._rlnNormCorrection = em.Float(row.getValue('rlnNormCorrection'))
+        # item._rlnLogLikeliContribution = em.Float(
+        #     row.getValue('rlnLogLikeliContribution'))
+        # item._rlnMaxValueProbDistribution = em.Float(
+        #     row.getValue('rlnMaxValueProbDistribution'))
+
+    def _updateClass(self, item):
+        classId = item.getObjId()
+        classRow = findRow(self.mdClasses, xmipp.MDL_REF2, classId)
+        setXmippAttributes(item, classRow, xmipp.MDL_ANGLE_ROT)
+        setXmippAttributes(item, classRow, xmipp.MDL_ANGLE_TILT)
+        setXmippAttributes(item, classRow, xmipp.MDL_CLASS_COUNT)
+
+        representative = item.getRepresentative()
+        representative.setTransform(rowToAlignment(classRow, ALIGN_PROJ))
+        representative.setLocation(xmippToLocation(classRow.getValue(xmipp.MDL_IMAGE)))
+
+        reprojection = Image()
+        reprojection.setLocation(xmippToLocation(classRow.getValue(xmipp.MDL_IMAGE1)))
+        item.reprojection = reprojection
+
+    # def createOutputStep(self):
+    #     fnDirectional=self._getPath("directionalClasses.xmd")
+    #     if exists(fnDirectional):
+    #         inputParticles = self.inputParticles.get()
+    #         self._sampling = inputParticles.getSamplingRate()
+    #         classes2DSet = self._createSetOfClasses2D(inputParticles)
+    #         readSetOfClasses2D(classes2DSet, fnDirectional, 'classes',
+    #                            preprocessClass=self._readRow)
+    #         self._defineOutputs(outputClasses=classes2DSet)
+    #         self._defineSourceRelation(self.inputParticles, classes2DSet)
+    #
+    # def _readRow(self, classItem, row):
+    #     img = Image()
+    #     img.setSamplingRate(self._sampling)
+    #     img.setLocation(xmippToLocation(row.getValue(xmipp.MDL_IMAGE1)))
+    #     classItem.reprojection = img
+    #
+    #     setXmippAttributes(classItem, row, xmipp.MDL_ANGLE_ROT)
+    #     setXmippAttributes(classItem, row, xmipp.MDL_ANGLE_TILT)
+
+    # --------------------------- INFO functions -------------------------------
+
     def _validate(self):
         validateMsgs = []
         # if there are Volume references, it cannot be empty.
@@ -186,5 +384,25 @@ class XmippProtSolidAngles(ProtAnalysis3D):
         summary = []
         return summary
 
-    
-    
+    #----------------------- UTILITY FUNCTIONS ---------------------------------
+
+    def _useSeveralClasses(self):
+        return self.directionalClasses > 1
+
+    def _getExpParticlesFn(self):
+        return self._getPath('input_particles.xmd')
+
+    def _getInputParticlesFn(self):
+        if self._useSeveralClasses():
+            return self._getTmpPath('scaled_particles.xmd')
+        else:
+            return self._getExpParticlesFn()
+
+    def _getInputVolFn(self):
+        return self._getTmpPath('volume.vol')
+
+    def _getDirectionalClassesFn(self):
+        return self._getPath("directional_classes.xmd")
+
+    def _getDirectionalImagesFn(self):
+        return self._getPath("directional_images.xmd")

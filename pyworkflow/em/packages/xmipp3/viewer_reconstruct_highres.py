@@ -23,7 +23,7 @@
 # * 02111-1307  USA
 # *
 # *  All comments concerning this program package may be sent to the
-# *  e-mail address 'jmdelarosa@cnb.csic.es'
+# *  e-mail address 'scipion@cnb.csic.es'
 # *
 # **************************************************************************
 
@@ -94,7 +94,7 @@ Examples:
                       help='Number of bins in histograms')
 
         group = form.addGroup('Volumes')
-        group.addParam('displayVolume', EnumParam, choices=['Reference', 'Reconstructed','Two processed halves', 'Two unprocessed halves'],
+        group.addParam('displayVolume', EnumParam, choices=['Reference', 'Reconstructed', 'Filtered'],
                        default=1, display=EnumParam.DISPLAY_COMBO,
                        label='Display volume',
                        help='Displays selected volume')
@@ -179,15 +179,12 @@ Examples:
                     fnDir = join(fnDir,'localAssignment')
                 fnVolumes = [join(fnDir,"volumeRef01.vol"),join(fnDir,"volumeRef02.vol")]
             elif choice == 1:
-                fnVolumes = [join(fnDir,"volumeAvg.mrc")]
+                fnVolume = join(fnDir,"volumeAvg.mrc")
             elif choice == 2:
-                fnVolumes = [join(fnDir,"volume01.vol"),join(fnDir,"volume02.vol")]
-            elif choice == 3:
-                fnVolumes = [join(fnDir,"volumeBeforePostProcessing01.vol"),join(fnDir,"volumeBeforePostProcessing02.vol")]
-            for fnVolume in fnVolumes:
-                if exists(fnVolume):
-                    samplingRate=self.protocol.readInfoField(fnDir,"sampling",MDL_SAMPLINGRATE)
-                    views.append(ObjectView(self._project, None, fnVolume, viewParams={showj.RENDER: 'image', showj.SAMPLINGRATE: samplingRate}))
+                fnVolume = join(fnDir,"volumeAvgFiltered.mrc")
+            if exists(fnVolume):
+                samplingRate=self.protocol.readInfoField(fnDir,"sampling",MDL_SAMPLINGRATE)
+                views.append(ObjectView(self._project, None, fnVolume, viewParams={showj.RENDER: 'image', showj.SAMPLINGRATE: samplingRate}))
         return views
 
     def _showOutputParticles(self, paramName=None):
@@ -270,9 +267,10 @@ Examples:
         view=None
         if exists(fnAngles):
             fnAnglesSqLite = join(fnDir,"angles.sqlite")
-            from pyworkflow.em.metadata.utils import getSize
             from pyworkflow.em.plotter import EmPlotter
-            self.createAngDistributionSqlite(fnAnglesSqLite, getSize(fnAngles), itemDataIterator=self._iterAngles(fnAngles))
+            if not exists(fnAnglesSqLite):
+                from pyworkflow.em.metadata.utils import getSize
+                self.createAngDistributionSqlite(fnAnglesSqLite, getSize(fnAngles), itemDataIterator=self._iterAngles(fnAngles))
             view = EmPlotter(x=1, y=1, mainTitle="Iteration %d" % it, windowTitle="Angular distribution")
             view.plotAngularDistributionFromMd(fnAnglesSqLite, 'iter %d' % it)
         return view
